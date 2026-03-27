@@ -44,9 +44,13 @@ TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
 
 def send_telegram_alert(image_path, message):
-    if TELEGRAM_BOT_TOKEN == "your_telegram_token":
-        print("Telegram bot token not configured. Skipping message.")
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "your_telegram_token":
+        print("Telegram error: TELEGRAM_BOT_TOKEN is not configured. Please add it to your code. Skipping message.")
         return
+    if not TELEGRAM_CHAT_ID:
+        print("Telegram error: TELEGRAM_CHAT_ID is not configured. Please add it to your code. Skipping message.")
+        return
+        
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     try:
         with open(image_path, "rb") as photo:
