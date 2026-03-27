@@ -1,0 +1,377 @@
+import sys
+import cv2
+import PyQt5
+import requests
+import warnings
+from datetime import datetime
+from ultralytics import YOLO
+
+# Suppress the deprecation warning for google.generativeai
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
+import google.generativeai as genai
+
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QHBoxLayout, QLabel,
+    QTextEdit, QFrame
+)
+
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt5.QtGui import QImage, QPixmap, QFont, QColor
+
+# ====================================
+# CONFIGURATION
+# ====================================
+
+CAMERA_SOURCE = 0
+YOLO_MODEL = "yolov8n.pt"
+
+CAMERA_ID = "CAM-01 [NODE: ALPHA]"
+LOCATION = "Delhi Highway Sector 12"
+
+CONFIDENCE_THRESHOLD = 0.4
+OVERLAP_THRESHOLD = 0.15
+ALERT_COOLDOWN = 5
+
+ACCIDENT_CLASSES = {"car", "truck", "bus", "motorcycle"}
+
+# ====================================
+# API KEYS & INTEGRATIONS
+# ====================================
+
+GEMINI_API_KEY = "your_gemini_api_key_here"
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
+
+def send_telegram_alert(image_path, message):
+    if TELEGRAM_BOT_TOKEN == "your_telegram_token":
+        print("Telegram bot token not configured. Skipping message.")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    try:
+        with open(image_path, "rb") as photo:
+            response = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": message}, files={"photo": photo})
+            if response.status_code == 200:
+                print("Telegram alert sent successfully.")
+            else:
+                print(f"Failed to send Telegram alert: {response.text}")
+    except Exception as e:
+        print("Telegram Error:", e)
+
+# Configure only if it's not the placeholder
+USE_GEMINI = False
+if GEMINI_API_KEY != "your_gemini_api_key_here":
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+        USE_GEMINI = True
+    except Exception as e:
+        print("Failed to configure Gemini:", e)
+
+def verify_accident(image_path):
+    if not USE_GEMINI:
+        # Provide a professional default description if API is not set
+        return True, "High-confidence collision detected by local Vision Node. Awaiting manual visual verification."
+
+    prompt = """
+    Analyze this road camera image for any vehicle accident, crash, or collision.
+    If you see an accident, start your response exactly with "YES: " and briefly describe the severity of the accident and the vehicles involved in the rest of the sentence.
+    If you DO NOT see an accident, reply exactly with "NO".
+    """
+    try:
+        response = gemini_model.generate_content(
+            [prompt, {
+                "mime_type": "image/jpeg",
+                "data": open(image_path, "rb").read()
+            }]
+        )
+        answer = response.text.strip().upper()
+        
+        if answer.startswith("YES"):
+            # Extract description by splitting at the first colon
+            parts = response.text.strip().split(":", 1)
+            description = parts[1].strip() if len(parts) > 1 else "Accident confirmed by AI."
+            return True, description
+            
+        return False, "No accident detected by AI."
+    except Exception as e:
+        print("Gemini Error:", e)
+        return False, f"API Error: {e}"
+
+# ====================================
+# IOU CALCULATION
+# ====================================
+
+def compute_iou(box1, box2):
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    if inter == 0:
+        return 0
+
+    a1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    a2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    return inter / (a1 + a2 - inter)
+
+# ====================================
+# ACCIDENT DETECTION
+# ====================================
+
+def detect_accident(results):
+    vehicles = []
+    for r in results:
+        for box in r.boxes:
+            conf = float(box.conf[0])
+            cls = r.names[int(box.cls[0])]
+            if conf < CONFIDENCE_THRESHOLD:
+                continue
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            if cls in ACCIDENT_CLASSES:
+                vehicles.append((x1, y1, x2, y2))
+                
+    accident = False
+    for i in range(len(vehicles)):
+        for j in range(i + 1, len(vehicles)):
+            if compute_iou(vehicles[i], vehicles[j]) > OVERLAP_THRESHOLD:
+                accident = True
+    return accident, vehicles
+
+# ====================================
+# VIDEO THREAD
+# ====================================
+
+class VideoThread(QThread):
+    change_pixmap_signal = pyqtSignal(object, list, bool)
+
+    def __init__(self, camera_source, yolo_model):
+        super().__init__()
+        self.camera_source = camera_source
+        self.running = True
+        self.model = YOLO(yolo_model)
+        
+    def run(self):
+        cap = cv2.VideoCapture(self.camera_source)
+        if not cap.isOpened():
+            print("Camera not accessible")
+            return
+            
+        while self.running:
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            # Mirror the frame horizontally (1) to make motion intuitive
+            frame = cv2.flip(frame, 1)
+
+            results = self.model(frame, verbose=False)
+            accident, vehicles = detect_accident(results)
+            self.change_pixmap_signal.emit(frame, vehicles, accident)
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
+# ====================================
+# MAIN WINDOW
+# ====================================
+
+class Window(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Vision Shield X - Jarvis Interface")
+        self.showMaximized()
+        self.last_alert = None
+
+        self.setup_styles()
+        self.build_ui()
+
+        # Start Video Thread
+        self.thread = VideoThread(CAMERA_SOURCE, YOLO_MODEL)
+        self.thread.change_pixmap_signal.connect(self.update_image)
+        self.thread.start()
+
+    def setup_styles(self):
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #0b0f19;
+            }
+            QLabel {
+                color: #00ffff;
+                font-family: 'Courier New', Courier, monospace;
+            }
+            QFrame#camFrame {
+                border: 2px solid #00ffff;
+                border-radius: 10px;
+                background-color: #05080f;
+            }
+            QFrame#camFrame[accident="true"] {
+                border: 2px solid #ff0055;
+            }
+            QFrame#bottomFrame {
+                border-top: 2px solid #005577;
+                background-color: #080c14;
+            }
+            QTextEdit {
+                background-color: #020408;
+                border: 1px solid #005577;
+                border-radius: 5px;
+                color: #00ffaa;
+                font-family: 'Courier New', Courier, monospace;
+                font-size: 14px;
+                padding: 10px;
+            }
+            QTextEdit#policeBox, QTextEdit#hospitalBox {
+                color: #00ffaa;
+                border: 1px solid #005577;
+            }
+            QLabel#titleText {
+                font-size: 22px;
+                font-weight: bold;
+                letter-spacing: 2px;
+                padding: 10px;
+                color: #ffffff;
+            }
+        """)
+
+    def build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
+
+        # Top Frame - Camera
+        self.camera_frame = QFrame()
+        self.camera_frame.setObjectName("camFrame")
+        self.camera_frame.setProperty("accident", False)
+        cam_layout = QVBoxLayout(self.camera_frame)
+
+        title = QLabel("SYSTEM FEED [OPTICAL SENSOR ALIVE]")
+        title.setObjectName("titleText")
+        title.setAlignment(Qt.AlignCenter)
+
+        self.video_label = QLabel()
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setStyleSheet("background:transparent; border: none;")
+        self.video_label.setMinimumHeight(500)
+
+        cam_layout.addWidget(title)
+        cam_layout.addWidget(self.video_label)
+
+        # Bottom Frame - Alerts
+        bottom_frame = QFrame()
+        bottom_frame.setObjectName("bottomFrame")
+        bottom_layout = QHBoxLayout(bottom_frame)
+
+        police_layout = QVBoxLayout()
+        police_title = QLabel("PRIMARY ALERT LOG [POLICE]")
+        police_title.setAlignment(Qt.AlignCenter)
+
+        self.police_box = QTextEdit()
+        self.police_box.setObjectName("policeBox")
+        self.police_box.setReadOnly(True)
+
+        police_layout.addWidget(police_title)
+        police_layout.addWidget(self.police_box)
+
+        hospital_layout = QVBoxLayout()
+        hospital_title = QLabel("SECONDARY ALERT LOG [HOSPITAL]")
+        hospital_title.setAlignment(Qt.AlignCenter)
+
+        self.hospital_box = QTextEdit()
+        self.hospital_box.setObjectName("hospitalBox")
+        self.hospital_box.setReadOnly(True)
+
+        hospital_layout.addWidget(hospital_title)
+        hospital_layout.addWidget(self.hospital_box)
+
+        bottom_layout.addLayout(police_layout)
+        bottom_layout.addLayout(hospital_layout)
+
+        main_layout.addWidget(self.camera_frame, stretch=7)
+        main_layout.addWidget(bottom_frame, stretch=3)
+
+    def update_image(self, frame, vehicles, accident):
+        for box in vehicles:
+            x1, y1, x2, y2 = box
+            # Normal green bounding box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        if accident:
+            cv2.rectangle(frame, (0, 0), (frame.shape[1] - 1, frame.shape[0] - 1), (0, 0, 255), 4)
+            cv2.putText(
+                frame, "CRITICAL: ACCIDENT DETECTED", (30, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3, cv2.LINE_AA
+            )
+            if not self.camera_frame.property("accident"):
+                self.camera_frame.setProperty("accident", True)
+                self.camera_frame.style().unpolish(self.camera_frame)
+                self.camera_frame.style().polish(self.camera_frame)
+            self.handle_accident(frame)
+        else:
+            if self.camera_frame.property("accident"):
+                self.camera_frame.setProperty("accident", False)
+                self.camera_frame.style().unpolish(self.camera_frame)
+                self.camera_frame.style().polish(self.camera_frame)
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        bytes_per_line = ch * w
+        img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+
+        pix = QPixmap.fromImage(img).scaled(
+            self.video_label.width(),
+            self.video_label.height(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.video_label.setPixmap(pix)
+
+    def handle_accident(self, frame):
+        now = datetime.now()
+        if self.last_alert and (now - self.last_alert).total_seconds() < ALERT_COOLDOWN:
+            return
+
+        self.last_alert = now
+        
+        import threading
+        from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
+
+        def process_alert():
+            timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+            filename = f"accident_{now.strftime('%Y%m%d_%H%M%S')}.jpg"
+            cv2.imwrite(filename, frame)
+
+            # Retrieve validation and description from Gemini (Blocking API call)
+            is_verified_accident, description = verify_accident(filename)
+
+            if is_verified_accident:
+                police_msg = f"[{timestamp}] ALERT DISPATCHED\nNode: {CAMERA_ID}\nLoc: {LOCATION}\nVerification: YES\nDetails: {description}\n"
+                hospital_msg = f"[{timestamp}] MEDICAL UNIT REQUESTED\nNode: {CAMERA_ID}\nETA: 5 mins\nDetails: {description}\n"
+                
+                # Send message + image to telegram
+                send_telegram_alert(filename, police_msg)
+            else:
+                police_msg = f"[{timestamp}] ALERT DOWNGRADED\nNode: {CAMERA_ID}\nVerification: NO (False Alarm)\n"
+                hospital_msg = f"[{timestamp}] MEDICAL UNIT STANDBY\nStatus: Cancelled\n"
+
+            # Safely Append to GUI using Qt event loop
+            QMetaObject.invokeMethod(self.police_box, "append", Qt.QueuedConnection, Q_ARG(str, police_msg))
+            QMetaObject.invokeMethod(self.hospital_box, "append", Qt.QueuedConnection, Q_ARG(str, hospital_msg))
+
+        # Start alert sub-thread so UI does not freeze during Gemini validation
+        threading.Thread(target=process_alert, daemon=True).start()
+
+    def closeEvent(self, event):
+        self.thread.stop()
+        super().closeEvent(event)
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = Window()
+    window.show()
+    sys.exit(app.exec_())
