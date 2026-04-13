@@ -19,8 +19,9 @@ from PyQt5.QtWidgets import (
     QGridLayout
 )
 
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap, QFont, QColor
+import torch
+import time
 
 # ====================================
 # CONFIGURATION
@@ -28,6 +29,10 @@ from PyQt5.QtGui import QImage, QPixmap, QFont, QColor
 
 CAMERA_SOURCE = 0
 YOLO_MODEL = "yolov8n.pt"
+
+# Detect Apple Silicon GPU (MPS)
+DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+print(f"--- POWERING VISION SHIELD X ON DEVICE: {DEVICE.upper()} ---")
 
 CAMERA_ID = "CAM-01 [NODE: ALPHA]"
 LOCATION = "Delhi Highway Sector 12"
@@ -259,13 +264,23 @@ class VideoThread(QThread):
         self.camera_source = camera_source
         self.running = True
         self.model = YOLO(yolo_model)
+        # Move model to optimal device (MPS on Mac)
+        self.model.to(DEVICE)
+        self.frame_count = 0
+        self.skip_rate = 2 # Process every 3rd frame for detection
         
     def run(self):
         cap = cv2.VideoCapture(self.camera_source)
+        # Performance: Set buffer size to 1 to reduce lag
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
         if not cap.isOpened():
             print("Camera not accessible")
             return
             
+        last_accident = False
+        last_vehicles = []
+
         while self.running:
             ret, frame = cap.read()
             if not ret:
@@ -273,10 +288,17 @@ class VideoThread(QThread):
 
             # Mirror the frame horizontally (1) to make motion intuitive
             frame = cv2.flip(frame, 1)
-
-            results = self.model(frame, verbose=False)
-            accident, vehicles = detect_accident(results)
-            self.change_pixmap_signal.emit(frame, vehicles, accident)
+            
+            # ZERO-LAG LOGIC: Continuous display, periodic inference
+            if self.frame_count % self.skip_rate == 0:
+                results = self.model(frame, verbose=False, device=DEVICE)
+                last_accident, last_vehicles = detect_accident(results)
+            
+            self.frame_count += 1
+            self.change_pixmap_signal.emit(frame, last_vehicles, last_accident)
+            
+            # Yield slightly to give UI some breathing room
+            time.sleep(0.01)
 
     def stop(self):
         self.running = False
@@ -423,7 +445,12 @@ class Window(QMainWindow):
 
         # Header Stats
         stats_hbox = QHBoxLayout()
-        for label, val in [("CAM STATUS", "ACTIVE"), ("TOTAL ALERTS", "12"), ("AI CONFIDENCE", "98%")]:
+        stats_data = [
+            ("NODE STATUS", "ONLINE"),
+            ("ACTIVE DEVICE", DEVICE.upper()),
+            ("AI CONFIDENCE", "98%")
+        ]
+        for label, val in stats_data:
             card = QFrame(); card.setObjectName("statsCard")
             l = QVBoxLayout(card)
             t = QLabel(label); t.setObjectName("statsTitle")
