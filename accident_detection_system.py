@@ -48,7 +48,7 @@ ACCIDENT_CLASSES = {"car", "truck", "bus", "motorcycle"}
 # API KEYS & INTEGRATIONS
 # ====================================
 
-GEMINI_API_KEY = "your_gemini_api_key_here"
+GEMINI_API_KEY = "AIzaSyCAJgzDiFMbHKI1KcIuJM5Akhj5q4wVC3A"
 TELEGRAM_BOT_TOKEN = "8428016965:AAFVX-jXN4utblu7m-eqQcUjCUYXkX-VJCg"
 TELEGRAM_CHAT_ID = "6965314664"
 
