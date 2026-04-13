@@ -48,9 +48,9 @@ ACCIDENT_CLASSES = {"car", "truck", "bus", "motorcycle"}
 # API KEYS & INTEGRATIONS
 # ====================================
 
-GEMINI_API_KEY = "AIzaSyCAJgzDiFMbHKI1KcIuJM5Akhj5q4wVC3A"
-TELEGRAM_BOT_TOKEN = "8428016965:AAFVX-jXN4utblu7m-eqQcUjCUYXkX-VJCg"
-TELEGRAM_CHAT_ID = "6965314664"
+GEMINI_API_KEY = ""
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
 
 def send_telegram_alert(image_path, message):
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "your_telegram_token":
