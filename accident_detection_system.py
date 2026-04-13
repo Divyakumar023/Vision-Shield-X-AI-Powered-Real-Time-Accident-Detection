@@ -14,7 +14,9 @@ from database_manager import DatabaseManager
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel,
-    QTextEdit, QFrame
+    QTextEdit, QFrame, QStackedWidget,
+    QPushButton, QScrollArea, QLineEdit,
+    QGridLayout
 )
 
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
@@ -145,6 +147,107 @@ def detect_accident(results):
     return accident, vehicles
 
 # ====================================
+# UI COMPONENTS (v2.0 Functional)
+# ====================================
+
+class HistoryCard(QFrame):
+    def __init__(self, incident_data):
+        super().__init__()
+        id, time, cam, loc, desc, img, verified = incident_data
+        self.setObjectName("statsCard")
+        layout = QVBoxLayout(self)
+        
+        header = QHBoxLayout()
+        t = QLabel(time); t.setStyleSheet("font-weight: bold; color: #0ea5e9;")
+        v = QLabel("VERIFIED" if verified else "UNCERTAIN")
+        v.setStyleSheet(f"color: {'#22c55e' if verified else '#94a3b8'}; font-size: 10px;")
+        header.addWidget(t); header.addStretch(); header.addWidget(v)
+        
+        l = QLabel(f"📍 {loc}"); l.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        d = QLabel(desc); d.setWordWrap(True); d.setStyleSheet("color: #f8fafc; font-size: 13px;")
+        
+        layout.addLayout(header)
+        layout.addWidget(l)
+        layout.addWidget(d)
+
+class HistoryView(QWidget):
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        title = QLabel("INCIDENT HISTORY")
+        title.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title)
+        
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("background: transparent; border: none;")
+        self.container = QWidget()
+        self.container_layout = QVBoxLayout(self.container)
+        self.container_layout.setAlignment(Qt.AlignTop)
+        self.scroll.setWidget(self.container)
+        
+        layout.addWidget(self.scroll)
+
+    def refresh(self):
+        # Clear existing
+        for i in reversed(range(self.container_layout.count())): 
+            self.container_layout.itemAt(i).widget().setParent(None)
+            
+        incidents = self.db.get_recent_incidents(20)
+        for inc in incidents:
+            self.container_layout.addWidget(HistoryCard(inc))
+
+class SettingsView(QWidget):
+    def __init__(self, parent_window):
+        super().__init__()
+        self.parent_window = parent_window
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignTop)
+        
+        title = QLabel("SYSTEM CONFIGURATION")
+        title.setStyleSheet("font-size: 24px; font-weight: bold; margin-bottom: 20px;")
+        layout.addWidget(title)
+        
+        grid = QGridLayout()
+        grid.setSpacing(15)
+        
+        self.inputs = {}
+        fields = [
+            ("GEMINI API KEY", "GEMINI_API_KEY"),
+            ("TELEGRAM BOT TOKEN", "TELEGRAM_BOT_TOKEN"),
+            ("TELEGRAM CHAT ID", "TELEGRAM_CHAT_ID"),
+            ("LOCATION LABEL", "LOCATION"),
+            ("OVERLAP THRESHOLD", "OVERLAP_THRESHOLD")
+        ]
+        
+        for i, (label_text, attr) in enumerate(fields):
+            lbl = QLabel(label_text); lbl.setObjectName("statsTitle")
+            edit = QLineEdit(); edit.setObjectName("alertLog")
+            # Get current value from module level (simplified)
+            current_val = str(globals().get(attr, ""))
+            edit.setText(current_val)
+            grid.addWidget(lbl, i, 0)
+            grid.addWidget(edit, i, 1)
+            self.inputs[attr] = edit
+            
+        layout.addLayout(grid)
+        
+        save_btn = QPushButton("SAVE CONFIGURATION")
+        save_btn.setStyleSheet("background-color: #0ea5e9; padding: 15px; font-weight: bold; margin-top: 20px;")
+        save_btn.clicked.connect(self.save_config)
+        layout.addWidget(save_btn)
+        
+    def save_config(self):
+        for attr, edit in self.inputs.items():
+            val = edit.text()
+            # Update global variables in the module
+            globals()[attr] = float(val) if "THRESHOLD" in attr else val
+        print("Configuration Updated.")
+
+# ====================================
 # VIDEO THREAD
 # ====================================
 
@@ -186,10 +289,11 @@ class VideoThread(QThread):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Vision Shield X [v2.0 PRE-RELEASE] - Jarvis Interface")
+        self.setWindowTitle("Vision Shield X [v2.0] - Mission Control")
         self.showMaximized()
         self.last_alert = None
         self.db = DatabaseManager()
+        self.nav_buttons = []
 
         self.setup_styles()
         self.build_ui()
@@ -296,33 +400,37 @@ class Window(QMainWindow):
         logo.setAlignment(Qt.AlignCenter)
         side_layout.addWidget(logo)
 
-        from PyQt5.QtWidgets import QPushButton
-        for label in ["LIVE MONITOR", "HISTORY", "ANALYTICS", "SETTINGS"]:
+        labels = ["LIVE MONITOR", "HISTORY", "ANALYTICS", "SETTINGS"]
+        for i, label in enumerate(labels):
             btn = QPushButton(label)
             btn.setObjectName("navBtn")
-            if label == "LIVE MONITOR":
-                btn.setProperty("active", True)
+            btn.setCheckable(True)
+            if i == 0: btn.setChecked(True)
+            btn.clicked.connect(lambda checked, idx=i: self.switch_view(idx))
             side_layout.addWidget(btn)
+            self.nav_buttons.append(btn)
         
         side_layout.addStretch()
 
-        # 2. Main Content
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(30, 30, 30, 30)
-        content_layout.setSpacing(25)
+        # 2. Main Content Stack
+        self.stack = QStackedWidget()
+        
+        # View 0: Live Monitor
+        self.live_widget = QWidget()
+        live_layout = QVBoxLayout(self.live_widget)
+        live_layout.setContentsMargins(30, 30, 30, 30)
+        live_layout.setSpacing(25)
 
         # Header Stats
         stats_hbox = QHBoxLayout()
         for label, val in [("CAM STATUS", "ACTIVE"), ("TOTAL ALERTS", "12"), ("AI CONFIDENCE", "98%")]:
-            card = QFrame()
-            card.setObjectName("statsCard")
+            card = QFrame(); card.setObjectName("statsCard")
             l = QVBoxLayout(card)
             t = QLabel(label); t.setObjectName("statsTitle")
             v = QLabel(val); v.setObjectName("statsVal")
             l.addWidget(t); l.addWidget(v)
             stats_hbox.addWidget(card)
-        content_layout.addLayout(stats_hbox)
+        live_layout.addLayout(stats_hbox)
 
         # Video Feed
         self.camera_frame = QFrame()
@@ -330,21 +438,45 @@ class Window(QMainWindow):
         self.camera_frame.setProperty("accident", False)
         cam_layout = QVBoxLayout(self.camera_frame)
         cam_layout.setContentsMargins(0,0,0,0)
-
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumHeight(450)
         cam_layout.addWidget(self.video_label)
-        content_layout.addWidget(self.camera_frame, stretch=7)
+        live_layout.addWidget(self.camera_frame, stretch=7)
 
-        # Unified Alerts Logs
         self.alert_log = QTextEdit()
         self.alert_log.setObjectName("alertLog")
         self.alert_log.setReadOnly(True)
-        content_layout.addWidget(self.alert_log, stretch=3)
+        live_layout.addWidget(self.alert_log, stretch=3)
+
+        # View 1: History
+        self.history_view = HistoryView(self.db)
+        
+        # View 2: Analytics (Placeholder)
+        self.analytics_view = QLabel("Strategic Analytics coming soon in v3.0")
+        self.analytics_view.setAlignment(Qt.AlignCenter)
+
+        # View 3: Settings
+        self.settings_view = SettingsView(self)
+
+        self.stack.addWidget(self.live_widget)
+        self.stack.addWidget(self.history_view)
+        self.stack.addWidget(self.analytics_view)
+        self.stack.addWidget(self.settings_view)
 
         main_hbox.addWidget(sidebar)
-        main_hbox.addWidget(content, stretch=10)
+        main_hbox.addWidget(self.stack, stretch=10)
+
+    def switch_view(self, index):
+        self.stack.setCurrentIndex(index)
+        for i, btn in enumerate(self.nav_buttons):
+            btn.setChecked(i == index)
+            btn.setProperty("active", i == index)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        
+        if index == 1: # History
+            self.history_view.refresh()
 
     def update_image(self, frame, vehicles, accident):
         for box in vehicles:
@@ -397,6 +529,21 @@ class Window(QMainWindow):
             filename = f"accident_{now.strftime('%Y%m%d_%H%M%S')}.jpg"
             cv2.imwrite(filename, frame)
 
+            # Retrieve validation and description from Gemini (Blocking API call)
+            is_verified_accident, description = verify_accident(filename)
+
+            if is_verified_accident:
+                unified_msg = (
+                    f"[{timestamp}] 🚨 EMERGENCY ALERT DETECTED\n"
+                    f"----------------------------------------\n"
+                    f"SOURCE: {CAMERA_ID}\n"
+                    f"LOCATION: {LOCATION}\n"
+                    f"VERIFICATION: YES (AI Confirmed)\n"
+                    f"DETAILS: {description}\n"
+                    f"----------------------------------------\n"
+                    f"STATUS: POLICE [DISPATCHED] | MEDICAL [REQUESTED]\n"
+                )
+                
                 # Send unified message + image to telegram
                 send_telegram_alert(filename, unified_msg)
 
