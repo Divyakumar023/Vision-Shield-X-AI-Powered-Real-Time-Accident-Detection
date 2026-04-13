@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QGridLayout
 )
 
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap, QFont, QColor
 import torch
 import time
