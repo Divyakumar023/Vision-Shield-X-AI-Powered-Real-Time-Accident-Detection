@@ -9,6 +9,7 @@ from ultralytics import YOLO
 # Suppress the deprecation warning for google.generativeai
 warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 import google.generativeai as genai
+from database_manager import DatabaseManager
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -185,9 +186,10 @@ class VideoThread(QThread):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Vision Shield X - Jarvis Interface")
+        self.setWindowTitle("Vision Shield X [v2.0 PRE-RELEASE] - Jarvis Interface")
         self.showMaximized()
         self.last_alert = None
+        self.db = DatabaseManager()
 
         self.setup_styles()
         self.build_ui()
@@ -200,54 +202,78 @@ class Window(QMainWindow):
     def setup_styles(self):
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #06090f;
+                background-color: #020617;
             }
             QLabel {
-                color: #00d2ff;
-                font-family: 'Segoe UI', Roboto, sans-serif;
-                font-weight: 600;
+                color: #38bdf8;
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }
+            QFrame#sidebar {
+                background-color: #0f172a;
+                border-right: 1px solid #1e293b;
+                min-width: 220px;
+            }
+            QPushButton#navBtn {
+                background-color: transparent;
+                color: #94a3b8;
+                border: none;
+                text-align: left;
+                padding: 15px 25px;
+                font-size: 14px;
+                font-weight: 500;
+                border-radius: 8px;
+                margin: 5px 10px;
+            }
+            QPushButton#navBtn:hover {
+                background-color: #1e293b;
+                color: #f8fafc;
+            }
+            QPushButton#navBtn[active="true"] {
+                background-color: #0ea5e9;
+                color: #ffffff;
             }
             QFrame#camFrame {
-                border: 2px solid #00d2ff;
-                border-radius: 12px;
-                background-color: #0a0e17;
-                padding: 5px;
+                border: 1px solid #0ea5e9;
+                border-radius: 16px;
+                background-color: #000000;
+                padding: 2px;
             }
             QFrame#camFrame[accident="true"] {
-                border: 2px solid #ff0055;
-                background-color: #1a050d;
+                border: 3px solid #ef4444;
+                background-color: #7f1d1d;
             }
-            QFrame#bottomFrame {
-                border: 1px solid #1e293b;
+            QFrame#statsCard {
+                background-color: #1e293b;
+                border: 1px solid #334155;
                 border-radius: 12px;
-                background-color: #0f172a;
-                padding: 10px;
+                padding: 15px;
             }
-            QTextEdit {
-                background-color: #020617;
-                border: 1px solid #1e293b;
-                border-radius: 8px;
-                color: #38bdf8;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 14px;
-                padding: 12px;
-                line-height: 1.5;
+            QLabel#statsTitle {
+                color: #94a3b8;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            QLabel#statsVal {
+                color: #f8fafc;
+                font-size: 24px;
+                font-weight: bold;
             }
             QTextEdit#alertLog {
-                border: 1px solid #00d2ff;
+                background-color: rgba(15, 23, 42, 0.8);
+                border: 1px solid #1e293b;
+                border-radius: 12px;
+                color: #38bdf8;
+                font-family: 'JetBrains Mono', 'Consolas', monospace;
+                font-size: 13px;
+                padding: 15px;
             }
             QLabel#titleText {
-                font-size: 20px;
-                font-weight: 800;
-                letter-spacing: 1.5px;
-                padding: 5px;
-                color: #f8fafc;
-                text-transform: uppercase;
-            }
-            QLabel#logTitle {
-                font-size: 16px;
-                color: #94a3b8;
-                padding-bottom: 5px;
+                font-size: 18px;
+                font-weight: 900;
+                color: #0ea5e9;
+                letter-spacing: 2px;
+                padding: 20px;
             }
         """)
 
@@ -255,46 +281,70 @@ class Window(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
 
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(20)
+        main_hbox = QHBoxLayout(central)
+        main_hbox.setContentsMargins(0, 0, 0, 0)
+        main_hbox.setSpacing(0)
 
-        # Top Frame - Camera
+        # 1. Sidebar
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(10, 20, 10, 20)
+
+        logo = QLabel("VISION\nSHIELD X")
+        logo.setObjectName("titleText")
+        logo.setAlignment(Qt.AlignCenter)
+        side_layout.addWidget(logo)
+
+        from PyQt5.QtWidgets import QPushButton
+        for label in ["LIVE MONITOR", "HISTORY", "ANALYTICS", "SETTINGS"]:
+            btn = QPushButton(label)
+            btn.setObjectName("navBtn")
+            if label == "LIVE MONITOR":
+                btn.setProperty("active", True)
+            side_layout.addWidget(btn)
+        
+        side_layout.addStretch()
+
+        # 2. Main Content
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(30, 30, 30, 30)
+        content_layout.setSpacing(25)
+
+        # Header Stats
+        stats_hbox = QHBoxLayout()
+        for label, val in [("CAM STATUS", "ACTIVE"), ("TOTAL ALERTS", "12"), ("AI CONFIDENCE", "98%")]:
+            card = QFrame()
+            card.setObjectName("statsCard")
+            l = QVBoxLayout(card)
+            t = QLabel(label); t.setObjectName("statsTitle")
+            v = QLabel(val); v.setObjectName("statsVal")
+            l.addWidget(t); l.addWidget(v)
+            stats_hbox.addWidget(card)
+        content_layout.addLayout(stats_hbox)
+
+        # Video Feed
         self.camera_frame = QFrame()
         self.camera_frame.setObjectName("camFrame")
         self.camera_frame.setProperty("accident", False)
         cam_layout = QVBoxLayout(self.camera_frame)
-
-        title = QLabel("VISION SHIELD X | SYSTEM FEED")
-        title.setObjectName("titleText")
-        title.setAlignment(Qt.AlignCenter)
+        cam_layout.setContentsMargins(0,0,0,0)
 
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("background:transparent; border: none;")
-        self.video_label.setMinimumHeight(500)
-
-        cam_layout.addWidget(title)
+        self.video_label.setMinimumHeight(450)
         cam_layout.addWidget(self.video_label)
+        content_layout.addWidget(self.camera_frame, stretch=7)
 
-        # Bottom Frame - Unified Alerts
-        bottom_frame = QFrame()
-        bottom_frame.setObjectName("bottomFrame")
-        bottom_layout = QVBoxLayout(bottom_frame)
-
-        log_title = QLabel("INTELLIGENT EMERGENCY LOG [UNIFIED]")
-        log_title.setObjectName("logTitle")
-        log_title.setAlignment(Qt.AlignLeft)
-
+        # Unified Alerts Logs
         self.alert_log = QTextEdit()
         self.alert_log.setObjectName("alertLog")
         self.alert_log.setReadOnly(True)
+        content_layout.addWidget(self.alert_log, stretch=3)
 
-        bottom_layout.addWidget(log_title)
-        bottom_layout.addWidget(self.alert_log)
-
-        main_layout.addWidget(self.camera_frame, stretch=7)
-        main_layout.addWidget(bottom_frame, stretch=3)
+        main_hbox.addWidget(sidebar)
+        main_hbox.addWidget(content, stretch=10)
 
     def update_image(self, frame, vehicles, accident):
         for box in vehicles:
@@ -347,23 +397,11 @@ class Window(QMainWindow):
             filename = f"accident_{now.strftime('%Y%m%d_%H%M%S')}.jpg"
             cv2.imwrite(filename, frame)
 
-            # Retrieve validation and description from Gemini (Blocking API call)
-            is_verified_accident, description = verify_accident(filename)
-
-            if is_verified_accident:
-                unified_msg = (
-                    f"[{timestamp}] 🚨 EMERGENCY ALERT DETECTED\n"
-                    f"----------------------------------------\n"
-                    f"SOURCE: {CAMERA_ID}\n"
-                    f"LOCATION: {LOCATION}\n"
-                    f"VERIFICATION: YES (AI Confirmed)\n"
-                    f"DETAILS: {description}\n"
-                    f"----------------------------------------\n"
-                    f"STATUS: POLICE [DISPATCHED] | MEDICAL [REQUESTED]\n"
-                )
-                
                 # Send unified message + image to telegram
                 send_telegram_alert(filename, unified_msg)
+
+                # Log to local database
+                self.db.log_incident(CAMERA_ID, LOCATION, description, filename, True)
             else:
                 unified_msg = (
                     f"[{timestamp}] ℹ️ SYSTEM UPDATE\n"
@@ -371,6 +409,7 @@ class Window(QMainWindow):
                     f"STATUS: Potential collision analyzed. Verification: NO (False Alarm).\n"
                     f"ACTION: None required. Units standing by.\n"
                 )
+                self.db.log_incident(CAMERA_ID, LOCATION, "False Alarm", filename, False)
 
             # Safely Append to GUI using Qt event loop
             QMetaObject.invokeMethod(self.alert_log, "append", Qt.QueuedConnection, Q_ARG(str, unified_msg))
