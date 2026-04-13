@@ -200,43 +200,54 @@ class Window(QMainWindow):
     def setup_styles(self):
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #0b0f19;
+                background-color: #06090f;
             }
             QLabel {
-                color: #00ffff;
-                font-family: 'Courier New', Courier, monospace;
+                color: #00d2ff;
+                font-family: 'Segoe UI', Roboto, sans-serif;
+                font-weight: 600;
             }
             QFrame#camFrame {
-                border: 2px solid #00ffff;
-                border-radius: 10px;
-                background-color: #05080f;
+                border: 2px solid #00d2ff;
+                border-radius: 12px;
+                background-color: #0a0e17;
+                padding: 5px;
             }
             QFrame#camFrame[accident="true"] {
                 border: 2px solid #ff0055;
+                background-color: #1a050d;
             }
             QFrame#bottomFrame {
-                border-top: 2px solid #005577;
-                background-color: #080c14;
+                border: 1px solid #1e293b;
+                border-radius: 12px;
+                background-color: #0f172a;
+                padding: 10px;
             }
             QTextEdit {
-                background-color: #020408;
-                border: 1px solid #005577;
-                border-radius: 5px;
-                color: #00ffaa;
-                font-family: 'Courier New', Courier, monospace;
+                background-color: #020617;
+                border: 1px solid #1e293b;
+                border-radius: 8px;
+                color: #38bdf8;
+                font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 14px;
-                padding: 10px;
+                padding: 12px;
+                line-height: 1.5;
             }
-            QTextEdit#policeBox, QTextEdit#hospitalBox {
-                color: #00ffaa;
-                border: 1px solid #005577;
+            QTextEdit#alertLog {
+                border: 1px solid #00d2ff;
             }
             QLabel#titleText {
-                font-size: 22px;
-                font-weight: bold;
-                letter-spacing: 2px;
-                padding: 10px;
-                color: #ffffff;
+                font-size: 20px;
+                font-weight: 800;
+                letter-spacing: 1.5px;
+                padding: 5px;
+                color: #f8fafc;
+                text-transform: uppercase;
+            }
+            QLabel#logTitle {
+                font-size: 16px;
+                color: #94a3b8;
+                padding-bottom: 5px;
             }
         """)
 
@@ -254,7 +265,7 @@ class Window(QMainWindow):
         self.camera_frame.setProperty("accident", False)
         cam_layout = QVBoxLayout(self.camera_frame)
 
-        title = QLabel("SYSTEM FEED [OPTICAL SENSOR ALIVE]")
+        title = QLabel("VISION SHIELD X | SYSTEM FEED")
         title.setObjectName("titleText")
         title.setAlignment(Qt.AlignCenter)
 
@@ -266,35 +277,21 @@ class Window(QMainWindow):
         cam_layout.addWidget(title)
         cam_layout.addWidget(self.video_label)
 
-        # Bottom Frame - Alerts
+        # Bottom Frame - Unified Alerts
         bottom_frame = QFrame()
         bottom_frame.setObjectName("bottomFrame")
-        bottom_layout = QHBoxLayout(bottom_frame)
+        bottom_layout = QVBoxLayout(bottom_frame)
 
-        police_layout = QVBoxLayout()
-        police_title = QLabel("PRIMARY ALERT LOG [POLICE]")
-        police_title.setAlignment(Qt.AlignCenter)
+        log_title = QLabel("INTELLIGENT EMERGENCY LOG [UNIFIED]")
+        log_title.setObjectName("logTitle")
+        log_title.setAlignment(Qt.AlignLeft)
 
-        self.police_box = QTextEdit()
-        self.police_box.setObjectName("policeBox")
-        self.police_box.setReadOnly(True)
+        self.alert_log = QTextEdit()
+        self.alert_log.setObjectName("alertLog")
+        self.alert_log.setReadOnly(True)
 
-        police_layout.addWidget(police_title)
-        police_layout.addWidget(self.police_box)
-
-        hospital_layout = QVBoxLayout()
-        hospital_title = QLabel("SECONDARY ALERT LOG [HOSPITAL]")
-        hospital_title.setAlignment(Qt.AlignCenter)
-
-        self.hospital_box = QTextEdit()
-        self.hospital_box.setObjectName("hospitalBox")
-        self.hospital_box.setReadOnly(True)
-
-        hospital_layout.addWidget(hospital_title)
-        hospital_layout.addWidget(self.hospital_box)
-
-        bottom_layout.addLayout(police_layout)
-        bottom_layout.addLayout(hospital_layout)
+        bottom_layout.addWidget(log_title)
+        bottom_layout.addWidget(self.alert_log)
 
         main_layout.addWidget(self.camera_frame, stretch=7)
         main_layout.addWidget(bottom_frame, stretch=3)
@@ -354,18 +351,29 @@ class Window(QMainWindow):
             is_verified_accident, description = verify_accident(filename)
 
             if is_verified_accident:
-                police_msg = f"[{timestamp}] ALERT DISPATCHED\nNode: {CAMERA_ID}\nLoc: {LOCATION}\nVerification: YES\nDetails: {description}\n"
-                hospital_msg = f"[{timestamp}] MEDICAL UNIT REQUESTED\nNode: {CAMERA_ID}\nETA: 5 mins\nDetails: {description}\n"
+                unified_msg = (
+                    f"[{timestamp}] 🚨 EMERGENCY ALERT DETECTED\n"
+                    f"----------------------------------------\n"
+                    f"SOURCE: {CAMERA_ID}\n"
+                    f"LOCATION: {LOCATION}\n"
+                    f"VERIFICATION: YES (AI Confirmed)\n"
+                    f"DETAILS: {description}\n"
+                    f"----------------------------------------\n"
+                    f"STATUS: POLICE [DISPATCHED] | MEDICAL [REQUESTED]\n"
+                )
                 
-                # Send message + image to telegram
-                send_telegram_alert(filename, police_msg)
+                # Send unified message + image to telegram
+                send_telegram_alert(filename, unified_msg)
             else:
-                police_msg = f"[{timestamp}] ALERT DOWNGRADED\nNode: {CAMERA_ID}\nVerification: NO (False Alarm)\n"
-                hospital_msg = f"[{timestamp}] MEDICAL UNIT STANDBY\nStatus: Cancelled\n"
+                unified_msg = (
+                    f"[{timestamp}] ℹ️ SYSTEM UPDATE\n"
+                    f"SOURCE: {CAMERA_ID}\n"
+                    f"STATUS: Potential collision analyzed. Verification: NO (False Alarm).\n"
+                    f"ACTION: None required. Units standing by.\n"
+                )
 
             # Safely Append to GUI using Qt event loop
-            QMetaObject.invokeMethod(self.police_box, "append", Qt.QueuedConnection, Q_ARG(str, police_msg))
-            QMetaObject.invokeMethod(self.hospital_box, "append", Qt.QueuedConnection, Q_ARG(str, hospital_msg))
+            QMetaObject.invokeMethod(self.alert_log, "append", Qt.QueuedConnection, Q_ARG(str, unified_msg))
 
         # Start alert sub-thread so UI does not freeze during Gemini validation
         threading.Thread(target=process_alert, daemon=True).start()
